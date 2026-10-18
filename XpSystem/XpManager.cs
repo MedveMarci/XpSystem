@@ -2,26 +2,39 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LabApi.Features.Wrappers;
+using XpSystem.ApiManager;
 using XpSystem.Storage;
 
 namespace XpSystem;
 
 public static class XpManager
 {
+    private static readonly Dictionary<string, long> RoundXp = new(StringComparer.Ordinal);
+
     public static bool IsEnabled { get; set; } = true;
+
+    public static bool CanHaveXp(Player player)
+    {
+        return player is { IsHost: false, IsPlayer: true, DoNotTrack: false };
+    }
+
+    public static bool IsRealUserId(string userId)
+    {
+        return !string.IsNullOrWhiteSpace(userId) && userId.Contains("@");
+    }
 
     public static long GetXp(Player player)
     {
         try
         {
-            if (player == null || player.DoNotTrack || player.IsDummy)
+            if (!CanHaveXp(player))
                 return 0;
 
             return XpStorage.Get(player.UserId);
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to read XP: {ex.Message}");
+            LogManager.Error($"Failed to read XP: {ex.Message}");
             return 0;
         }
     }
@@ -34,7 +47,7 @@ public static class XpManager
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to read XP: {ex.Message}");
+            LogManager.Error($"Failed to read XP: {ex.Message}");
             return 0;
         }
     }
@@ -47,7 +60,7 @@ public static class XpManager
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to read the XP data: {ex.Message}");
+            LogManager.Error($"Failed to read the XP data: {ex.Message}");
             return new Dictionary<string, long>();
         }
     }
@@ -56,7 +69,7 @@ public static class XpManager
     {
         try
         {
-            if (!IsEnabled || player == null || player.DoNotTrack || player.IsDummy)
+            if (!IsEnabled || !CanHaveXp(player))
                 return;
 
             Config config = XpSystemPlugin.Singleton?.Config;
@@ -69,18 +82,19 @@ public static class XpManager
             int finalAmount = Math.Max(1, (int)(baseAmount * config.XpMultiplier));
 
             long currentXp = XpStorage.Add(player.UserId, finalAmount);
+            RoundXp[player.UserId] = GetRoundXp(player) + finalAmount;
             RankConfig currentRank = GetRank(currentXp);
             RankConfig nextRank = GetNextRank(currentXp);
 
             string hintText;
             string rankUpLine = string.Empty;
             if (currentRank != null && previousRank != null && !string.Equals(previousRank.BadgeName, currentRank.BadgeName, StringComparison.Ordinal))
-                rankUpLine = $"<size=26><color=#FFD700>Rank up! New rank: {currentRank.BadgeName}</color></size>\n";
+                rankUpLine = $"<size=26><color=#FFD700>Rank up! New rank: <color={EventHandlers.GetHexColor(currentRank.BadgeColor)}>{currentRank.BadgeName}</color></color></size>\n";
 
             if (nextRank != null)
             {
                 long remaining = nextRank.MinXp - currentXp;
-                hintText = rankUpLine + $"<color=green>+{finalAmount} XP</color> | {reason}\n" + $"<size=24>Next rank: <color={nextRank.BadgeColor}>{nextRank.BadgeName}</color> ({remaining} XP left)</size>";
+                hintText = rankUpLine + $"<color=green>+{finalAmount} XP</color> | {reason}\n" + $"<size=24>Next rank: <color={EventHandlers.GetHexColor(nextRank.BadgeColor)}>{nextRank.BadgeName}</color> ({remaining} XP left)</size>";
             }
             else
             {
@@ -88,12 +102,26 @@ public static class XpManager
             }
 
             player.SendHint(hintText, config.HintDuration);
-            BadgeManager.UpdatePlayerBadge(player);
+            BadgeManager.Refresh(player);
+            XpInfoMenu.UpdateIfOpen(player);
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to add XP: {ex.Message}");
+            LogManager.Error($"Failed to add XP: {ex.Message}");
         }
+    }
+
+    public static long GetRoundXp(Player player)
+    {
+        if (player == null || string.IsNullOrEmpty(player.UserId))
+            return 0;
+
+        return RoundXp.TryGetValue(player.UserId, out long value) ? value : 0;
+    }
+
+    public static void ResetRoundXp()
+    {
+        RoundXp.Clear();
     }
 
     public static RankConfig GetRank(long xp)
@@ -123,16 +151,17 @@ public static class XpManager
     {
         try
         {
-            if (player == null || player.DoNotTrack || player.IsDummy)
+            if (!CanHaveXp(player))
                 return;
 
             long currentXp = GetXp(player);
             XpStorage.Set(player.UserId, Math.Max(0, currentXp - amount));
-            BadgeManager.UpdatePlayerBadge(player);
+            BadgeManager.Refresh(player);
+            XpInfoMenu.UpdateIfOpen(player);
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to remove XP: {ex.Message}");
+            LogManager.Error($"Failed to remove XP: {ex.Message}");
         }
     }
 
@@ -140,15 +169,16 @@ public static class XpManager
     {
         try
         {
-            if (player == null || player.DoNotTrack || player.IsDummy)
+            if (!CanHaveXp(player))
                 return;
 
             XpStorage.Set(player.UserId, Math.Max(0, amount));
-            BadgeManager.UpdatePlayerBadge(player);
+            BadgeManager.Refresh(player);
+            XpInfoMenu.UpdateIfOpen(player);
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to set XP: {ex.Message}");
+            LogManager.Error($"Failed to set XP: {ex.Message}");
         }
     }
 }

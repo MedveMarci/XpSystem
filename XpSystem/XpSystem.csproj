@@ -31,9 +31,9 @@
 
     <ItemGroup>
         <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all"/>
-        <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all"/>
+        <PackageReference Include="Lib.Harmony" Version="2.4.2"/>
         <PackageReference Include="Northwood.LabAPI" Version="1.1.7"/>
-        <PackageReference Include="System.Text.Json" Version="10.0.9"/>
+        <PackageReference Include="System.Text.Json" Version="9.0.4"/>
     </ItemGroup>
 
     <ItemGroup>
@@ -43,7 +43,13 @@
         <Reference Include="CommandSystem.Core" HintPath="$(sl_references)\CommandSystem.Core.dll"/>
         <Reference Include="UnityEngine.CoreModule" HintPath="$(sl_references)\UnityEngine.CoreModule.dll"/>
         <Reference Include="NorthwoodLib" HintPath="$(sl_references)\NorthwoodLib.dll"/>
-        <Reference Include="LabApiExtensions" HintPath="$(labapi_dependencies)\LabApiExtensions.dll"/>
+        <Reference Include="Unity.TextMeshPro" HintPath="$(sl_references)\Unity.TextMeshPro.dll"/>
+        <Reference Include="Pooling" HintPath="$(sl_references)\Pooling.dll"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Content Include="..\README.md" Link="README.md"/>
+        <Content Include="..\CHANGELOG.md" Link="CHANGELOG.md"/>
     </ItemGroup>
 
     <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(OS)' == 'Windows_NT'">

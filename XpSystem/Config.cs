@@ -29,6 +29,15 @@ public class Config
     [Description("How long (in seconds) the XP hint is displayed.")]
     public float HintDuration { get; set; } = 5f;
 
+    [Description("Shows the rank as custom info (under the name) for players whose visible global badge replaces the rank badge.")]
+    public bool GlobalBadgeRankInfo { get; set; } = true;
+
+    [Description("Shows an XP info panel (rank, level, progress, round XP, leaderboard position) in the Server-specific settings tab.")]
+    public bool InfoMenuEnabled { get; set; } = true;
+
+    [Description("Setting id of the info panel. Only change it if it collides with another plugin's server-specific setting.")]
+    public int InfoMenuSettingId { get; set; } = 7710;
+
     [Description("XP event settings. Key = event id, Value = Enabled/Xp/Reason. To add a new event, add its key here and override the matching method in EventHandlers.")]
     public Dictionary<string, XpEventConfig> XpEvents { get; set; } = new()
     {

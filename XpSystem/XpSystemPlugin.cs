@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using HarmonyLib;
 using LabApi.Events.CustomHandlers;
 using LabApi.Features;
 using LabApi.Loader.Features.Paths;
 using LabApi.Loader.Features.Plugins;
 using MEC;
+using XpSystem.ApiManager;
 using XpSystem.Storage;
 using Version = System.Version;
 
@@ -16,6 +18,7 @@ internal class XpSystemPlugin : Plugin<Config>
     internal static XpSystemPlugin Singleton;
     private CoroutineHandle _autoSaveHandle;
     private EventHandlers _eventHandlers;
+    private Harmony _harmony;
 
     public override string Name => "XpSystem";
 
@@ -23,7 +26,7 @@ internal class XpSystemPlugin : Plugin<Config>
 
     public override string Author => "MedveMarci";
 
-    public override Version Version { get; } = new(1, 0, 0);
+    public override Version Version { get; } = new(1, 1, 0);
 
     public override Version RequiredApiVersion => new(LabApiProperties.CompiledVersion);
 
@@ -39,12 +42,17 @@ internal class XpSystemPlugin : Plugin<Config>
             _eventHandlers = new EventHandlers();
             CustomHandlersManager.RegisterEventsHandler(_eventHandlers);
 
+            XpInfoMenu.Register();
+
+            _harmony = new Harmony($"{Author}.{Name}");
+            _harmony.PatchAll(typeof(XpSystemPlugin).Assembly);
+
             int interval = Math.Max(10, Config.AutoSaveIntervalSeconds);
             _autoSaveHandle = Timing.RunCoroutine(AutoSaveCoroutine(interval));
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to enable: {ex}");
+            LogManager.Error($"Failed to enable: {ex}");
         }
     }
 
@@ -57,7 +65,12 @@ internal class XpSystemPlugin : Plugin<Config>
             if (_eventHandlers != null)
                 CustomHandlersManager.UnregisterEventsHandler(_eventHandlers);
 
-            BadgeManager.ClearCache();
+            XpInfoMenu.Unregister();
+
+            _harmony?.UnpatchAll(_harmony.Id);
+            _harmony = null;
+
+            BadgeManager.Restore();
 
             XpStorage.Save();
             XpStorage.Unload();
@@ -68,7 +81,7 @@ internal class XpSystemPlugin : Plugin<Config>
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to disable: {ex}");
+            LogManager.Error($"Failed to disable: {ex}");
         }
     }
 

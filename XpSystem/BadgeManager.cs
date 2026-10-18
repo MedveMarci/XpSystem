@@ -1,262 +1,250 @@
 using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using LabApi.Features.Wrappers;
-using LabApiExtensions.FakeExtension;
+using PlayerRoles.PlayableScps.Scp3114;
+using XpSystem.ApiManager;
 
 namespace XpSystem;
 
 public static class BadgeManager
 {
-    private static readonly ConcurrentDictionary<string, OriginalBadgeInfo> OriginalBadges = new();
+    private static readonly char[] ForbiddenChars = ['[', ']', '<', '>'];
 
-    public static void CacheOriginalBadge(Player player)
+    private static readonly Dictionary<ReferenceHub, BadgeState> States = new();
+
+    public static void Refresh(Player player, bool force = false)
     {
         try
         {
-            if (player?.ReferenceHub == null || string.IsNullOrEmpty(player.UserId))
+            if (!IsRealPlayer(player))
                 return;
 
-            ServerRoles sr = player.ReferenceHub.serverRoles;
-            UserGroup group = sr.Group;
+            BadgeState state = GetState(player.ReferenceHub);
+            UpdateRankInfo(player, state);
 
-            bool hasGlobal = !string.IsNullOrEmpty(sr.NetworkGlobalBadge);
+            ServerRoles roles = player.ReferenceHub.serverRoles;
+            TryGetBadge(player, roles.Network_myText, roles.Network_myColor, out string text, out string color);
 
-            OriginalBadgeInfo info = new()
-            {
-                HasGlobalBadge = hasGlobal
-            };
-
-            if (hasGlobal)
-            {
-                info.HasBadge = true;
-                info.BadgeText = string.Empty;
-                info.BadgeColor = string.Empty;
-                info.IsBadgeHidden = false;
-            }
-            else if (group != null && !string.IsNullOrEmpty(group.BadgeText))
-            {
-                info.HasBadge = true;
-                info.BadgeText = group.BadgeText;
-                info.BadgeColor = group.BadgeColor ?? "default";
-                info.IsBadgeHidden = string.IsNullOrEmpty(player.GroupName);
-            }
-            else
-            {
-                info.HasBadge = false;
-                info.BadgeText = string.Empty;
-                info.BadgeColor = string.Empty;
-                info.IsBadgeHidden = false;
-            }
-
-            OriginalBadges[player.UserId] = info;
+            if (force || text != state.SentText || color != state.SentColor)
+                roles.SetSyncVarDirtyBit(1ul | 2ul);
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Badge cache error: {ex.Message}");
+            LogManager.Error($"Badge refresh error: {ex.Message}");
         }
     }
 
-    public static void RemoveCachedBadge(string userId)
+    public static void RefreshAll()
     {
-        if (!string.IsNullOrEmpty(userId))
-            OriginalBadges.TryRemove(userId, out _);
+        foreach (Player player in Player.ReadyList)
+            Refresh(player, true);
     }
 
-    public static void ClearCache()
+    public static void Forget(Player player)
     {
-        OriginalBadges.Clear();
+        if (player?.ReferenceHub != null)
+            States.Remove(player.ReferenceHub);
     }
 
-    public static void UpdatePlayerBadge(Player player)
+    public static void Clear()
     {
-        try
-        {
-            if (player?.ReferenceHub == null || !player.IsReady)
-                return;
-
-            if (!OriginalBadges.TryGetValue(player.UserId, out OriginalBadgeInfo originalInfo))
-            {
-                CacheOriginalBadge(player);
-                if (!OriginalBadges.TryGetValue(player.UserId, out originalInfo))
-                    return;
-            }
-
-            if (originalInfo.HasGlobalBadge)
-                return;
-
-            Config config = XpSystemPlugin.Singleton?.Config;
-            if (config == null)
-                return;
-
-            string rankName;
-            string rankColor;
-
-            if (player.DoNotTrack)
-            {
-                rankName = config.DntBadgeText;
-                rankColor = config.DntBadgeColor;
-            }
-            else
-            {
-                long xp = XpManager.GetXp(player);
-                RankConfig rank = XpManager.GetRank(xp);
-                if (rank == null)
-                    return;
-
-                rankName = rank.BadgeName;
-                rankColor = rank.BadgeColor;
-            }
-
-            if (originalInfo.IsBadgeHidden)
-            {
-                ApplyHiddenBadgeForAllViewers(player, rankName, rankColor);
-                return;
-            }
-
-            string displayColor = rankColor;
-            if (originalInfo.HasBadge && !string.IsNullOrEmpty(originalInfo.BadgeColor) && !originalInfo.IsBadgeHidden)
-                displayColor = originalInfo.BadgeColor;
-
-            string displayBadge = originalInfo.HasBadge && !string.IsNullOrEmpty(originalInfo.BadgeText) ? $"{rankName} - {originalInfo.BadgeText}" : rankName;
-
-            foreach (Player viewer in Player.ReadyList)
-                try
-                {
-                    if (viewer?.ReferenceHub == null || !viewer.IsReady)
-                        continue;
-
-                    player.SetFakeBadgeText(viewer, displayBadge);
-                    player.SetFakeBadgeColor(viewer, displayColor);
-                }
-                catch (Exception ex)
-                {
-                    LogManager.Error($"[XpSystem] Fake badge error (viewer: {viewer?.UserId}): {ex.Message}");
-                }
-        }
-        catch (Exception ex)
-        {
-            LogManager.Error($"[XpSystem] Badge update error: {ex.Message}");
-        }
+        States.Clear();
     }
 
-    private static void ApplyHiddenBadgeForAllViewers(Player player, string rankName, string rankColor)
-    {
-        foreach (Player viewer in Player.ReadyList)
-            try
-            {
-                if (viewer?.ReferenceHub == null || !viewer.IsReady)
-                    continue;
-
-                if (viewer.RemoteAdminAccess)
-                    continue;
-
-                player.SetFakeBadgeText(viewer, rankName);
-                player.SetFakeBadgeColor(viewer, rankColor);
-            }
-            catch (Exception ex)
-            {
-                LogManager.Error($"[XpSystem] Hidden badge error (viewer: {viewer?.UserId}): {ex.Message}");
-            }
-    }
-
-    public static void UpdateAllBadges()
+    public static void Restore()
     {
         foreach (Player player in Player.ReadyList)
             try
             {
-                if (player?.ReferenceHub == null)
+                if (!IsRealPlayer(player) || !States.TryGetValue(player.ReferenceHub, out BadgeState state))
                     continue;
 
-                CacheOriginalBadge(player);
-                UpdatePlayerBadge(player);
+                if (state.RankInfo != null && player.CustomInfo == state.RankInfo)
+                    player.CustomInfo = string.Empty;
+
+                player.ReferenceHub.serverRoles.SetSyncVarDirtyBit(1ul | 2ul);
             }
             catch (Exception ex)
             {
-                LogManager.Error($"[XpSystem] Badge update error ({player?.UserId}): {ex.Message}");
+                LogManager.Error($"Badge restore error ({player?.UserId}): {ex.Message}");
             }
+
+        Clear();
     }
 
-    public static void UpdateBadgesForViewer(Player viewer)
+    internal static bool TryGetSerializedBadge(ReferenceHub hub, string realText, string realColor, out string text, out string color)
     {
-        if (viewer?.ReferenceHub == null || !viewer.IsReady)
-            return;
+        text = color = null;
 
-        foreach (Player player in Player.ReadyList)
-            try
-            {
-                if (player?.ReferenceHub == null || !player.IsReady)
-                    continue;
+        if (!Player.TryGet(hub.gameObject, out Player player) || !IsRealPlayer(player))
+            return false;
 
-                if (player.UserId == viewer.UserId)
-                    continue;
+        bool replaced = TryGetBadge(player, realText, realColor, out text, out color);
 
-                UpdateSingleBadgeForViewer(player, viewer);
-            }
-            catch (Exception ex)
-            {
-                LogManager.Error($"[XpSystem] Badge viewer update error: {ex.Message}");
-            }
+        BadgeState state = GetState(hub);
+        state.SentText = text;
+        state.SentColor = color;
+
+        return replaced;
     }
 
-    private static void UpdateSingleBadgeForViewer(Player player, Player viewer)
+    private static bool TryGetBadge(Player player, string realText, string realColor, out string text, out string color)
     {
-        if (!OriginalBadges.TryGetValue(player.UserId, out OriginalBadgeInfo originalInfo))
-            return;
+        text = color = null;
 
-        if (originalInfo.HasGlobalBadge)
-            return;
+        ServerRoles roles = player.ReferenceHub.serverRoles;
+        if (!string.IsNullOrEmpty(roles.GlobalBadge) || !TryGetRank(player, out string rankName, out string rankColor))
+            return false;
 
-        Config config = XpSystemPlugin.Singleton?.Config;
-        if (config == null)
-            return;
-
-        string rankName;
-        string rankColor;
-
-        if (player.DoNotTrack)
+        if (string.IsNullOrEmpty(realText))
         {
-            rankName = config.DntBadgeText;
-            rankColor = config.DntBadgeColor;
+            text = Sanitize(rankName);
+            color = rankColor;
         }
         else
         {
-            long xp = XpManager.GetXp(player);
-            RankConfig rank = XpManager.GetRank(xp);
-            if (rank == null)
-                return;
-
-            rankName = rank.BadgeName;
-            rankColor = rank.BadgeColor;
+            text = Sanitize($"{rankName} - {realText}");
+            color = IsUsableColor(roles, realColor) ? realColor : rankColor;
         }
 
-        if (originalInfo.IsBadgeHidden && viewer.RemoteAdminAccess)
-            return;
+        if (!IsUsableColor(roles, color))
+            color = "default";
 
-        if (originalInfo.IsBadgeHidden)
-        {
-            player.SetFakeBadgeText(viewer, rankName);
-            player.SetFakeBadgeColor(viewer, rankColor);
-            return;
-        }
+        if (!string.IsNullOrEmpty(text))
+            return true;
 
-        string displayBadge = originalInfo.HasBadge && !string.IsNullOrEmpty(originalInfo.BadgeText) ? $"{rankName} - {originalInfo.BadgeText}" : rankName;
-
-        string displayColor = originalInfo.HasBadge && !string.IsNullOrEmpty(originalInfo.BadgeColor) ? originalInfo.BadgeColor : rankColor;
-
-        player.SetFakeBadgeText(viewer, displayBadge);
-        player.SetFakeBadgeColor(viewer, displayColor);
+        text = color = null;
+        return false;
     }
 
-    internal class OriginalBadgeInfo
+    private static void UpdateRankInfo(Player player, BadgeState state)
     {
-        public string BadgeText { get; set; } = string.Empty;
+        string current = player.CustomInfo;
+        if (!string.IsNullOrEmpty(current) && current != state.RankInfo)
+        {
+            state.RankInfo = null;
+            return;
+        }
 
-        public string BadgeColor { get; set; } = string.Empty;
+        string info = GetWantedRankInfo(player);
 
-        public bool IsBadgeHidden { get; set; }
+        if (current != (info ?? string.Empty))
+            player.CustomInfo = info ?? string.Empty;
 
-        public bool HasGlobalBadge { get; set; }
+        state.RankInfo = info;
+    }
 
-        public bool HasBadge { get; set; }
+    private static string GetWantedRankInfo(Player player)
+    {
+        if (player.RoleBase is Scp3114Role scp3114)
+            return TryGetDisguise(scp3114, out Player disguise) ? GetRankInfo(disguise ?? player) : null;
+
+        bool globalBadge = XpSystemPlugin.Singleton?.Config is { GlobalBadgeRankInfo: true } && !string.IsNullOrEmpty(player.ReferenceHub.serverRoles.GlobalBadge);
+        return globalBadge ? GetRankInfo(player) : null;
+    }
+
+    private static bool TryGetDisguise(Scp3114Role role, out Player disguise)
+    {
+        disguise = null;
+
+        if (!role.SubroutineModule.TryGetSubroutine(out Scp3114Identity identity))
+            return false;
+
+        Scp3114Identity.StolenIdentity stolen = identity.CurIdentity;
+        if (stolen.Status != Scp3114Identity.DisguiseStatus.Active || stolen.Ragdoll == null)
+            return false;
+
+        ReferenceHub owner = stolen.Ragdoll.Info.OwnerHub;
+        if (owner != null)
+            disguise = Player.Get(owner);
+
+        return true;
+    }
+
+    private static string GetRankInfo(Player player)
+    {
+        if (!TryGetRank(player, out string name, out string color))
+            return null;
+
+        name = Sanitize(name);
+        if (string.IsNullOrEmpty(name))
+            return null;
+
+        string info = $"<color={EventHandlers.GetHexColor(color)}>{name}</color>";
+        if (NicknameSync.ValidateCustomInfo(info, out _))
+            return info;
+
+        return NicknameSync.ValidateCustomInfo(name, out _) ? name : null;
+    }
+
+    private static bool TryGetRank(Player player, out string name, out string color)
+    {
+        name = color = null;
+
+        Config config = XpSystemPlugin.Singleton?.Config;
+        if (config == null)
+            return false;
+
+        if (player.DoNotTrack)
+        {
+            name = config.DntBadgeText;
+            color = config.DntBadgeColor;
+            return true;
+        }
+
+        RankConfig rank = XpManager.GetRank(XpManager.GetXp(player));
+        if (rank == null)
+            return false;
+
+        name = rank.BadgeName;
+        color = rank.BadgeColor;
+        return true;
+    }
+
+    private static bool IsUsableColor(ServerRoles roles, string color)
+    {
+        if (string.IsNullOrEmpty(color))
+            return false;
+
+        foreach (ServerRoles.NamedColor namedColor in roles.NamedColors)
+            if (namedColor.Name == color)
+                return !namedColor.Restricted;
+
+        return false;
+    }
+
+    private static string Sanitize(string text)
+    {
+        if (text == null)
+            return null;
+
+        if (text.IndexOfAny(ForbiddenChars) >= 0)
+            text = new string([.. text.Where(c => Array.IndexOf(ForbiddenChars, c) < 0)]);
+
+        if (text.IndexOf("\\u003", StringComparison.Ordinal) >= 0)
+            text = text.Replace("\\u003c", string.Empty).Replace("\\u003e", string.Empty);
+
+        return text.Trim();
+    }
+
+    private static BadgeState GetState(ReferenceHub hub)
+    {
+        if (!States.TryGetValue(hub, out BadgeState state))
+            States[hub] = state = new BadgeState();
+
+        return state;
+    }
+
+    private static bool IsRealPlayer(Player player)
+    {
+        return player?.ReferenceHub != null && player.IsReady && !player.IsDummy && !player.IsHost;
+    }
+
+    private sealed class BadgeState
+    {
+        public string SentText;
+        public string SentColor;
+        public string RankInfo;
     }
 }

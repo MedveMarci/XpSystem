@@ -30,7 +30,7 @@ public class XpRefreshSubCommand : ICommand
                 return false;
             }
 
-            BadgeManager.UpdateAllBadges();
+            BadgeManager.RefreshAll();
             response = "Every badge has been refreshed.";
             return true;
         }

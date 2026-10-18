@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using XpSystem.ApiManager;
 
 namespace XpSystem.Storage;
 
@@ -32,7 +33,8 @@ internal static class XpStorage
 
             if (!File.Exists(_filePath))
             {
-                LogManager.Info($"[XpSystem] XP data file not found, a new one will be created: {_filePath}");
+                LogManager.Info($"XP data file not found, creating a new one: {_filePath}");
+                Save();
                 return;
             }
 
@@ -44,13 +46,19 @@ internal static class XpStorage
             if (loaded == null)
                 return;
 
-            foreach (KeyValuePair<string, long> entry in loaded.Where(entry => !string.IsNullOrWhiteSpace(entry.Key))) Values[entry.Key] = Math.Max(0L, entry.Value);
+            foreach (KeyValuePair<string, long> entry in loaded.Where(entry => XpManager.IsRealUserId(entry.Key))) Values[entry.Key] = Math.Max(0L, entry.Value);
 
-            LogManager.Info($"[XpSystem] XP data loaded: {Values.Count} records ({_filePath}).");
+            int skipped = loaded.Count - Values.Count;
+
+            if (skipped > 0)
+                Save();
+
+
+            LogManager.Info($"XP data loaded: {Values.Count} records ({_filePath}).");
         }
         catch (Exception ex)
         {
-            LogManager.Error($"[XpSystem] Failed to load the XP data: {ex.Message}");
+            LogManager.Error($"Failed to load the XP data: {ex.Message}");
         }
     }
 
@@ -113,11 +121,11 @@ internal static class XpStorage
                 else
                     File.Move(temporaryPath, path);
 
-                LogManager.Debug($"[XpSystem] XP data saved: {snapshot.Count} records.");
+                LogManager.Debug($"XP data saved: {snapshot.Count} records.");
             }
             catch (Exception ex)
             {
-                LogManager.Error($"[XpSystem] Failed to save the XP data: {ex.Message}");
+                LogManager.Error($"Failed to save the XP data: {ex.Message}");
             }
         }
     }

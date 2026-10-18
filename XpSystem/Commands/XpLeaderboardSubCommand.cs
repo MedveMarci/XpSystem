@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CommandSystem;
 using LabApi.Features.Wrappers;
+using XpSystem.ApiManager;
 
 namespace XpSystem.Commands;
 
@@ -24,7 +25,7 @@ public class XpLeaderboardSubCommand : ICommand
         try
         {
             IReadOnlyDictionary<string, long> allXp = XpManager.GetAllXp();
-            LogManager.Debug($"[XpLeaderboard] Records read: {allXp.Count}");
+            LogManager.Debug($"Records read: {allXp.Count}");
 
             var top = allXp.Where(kv => !kv.Key.EndsWith("@discord")).Where(kv => kv.Value > 0).OrderByDescending(kv => kv.Value).Take(5).Select(kv =>
             {
@@ -38,7 +39,7 @@ public class XpLeaderboardSubCommand : ICommand
                 };
             }).ToList();
 
-            LogManager.Debug($"[XpLeaderboard] Top 5 players selected: {string.Join(", ", top.Select(p => $"{p.Name} ({p.Xp} XP)"))}");
+            LogManager.Debug($"Top 5 players selected: {string.Join(", ", top.Select(p => $"{p.Name} ({p.Xp} XP)"))}");
 
             if (top.Count == 0)
             {

@@ -9,9 +9,9 @@ using LabApi.Events.Arguments.ServerEvents;
 using LabApi.Events.CustomHandlers;
 using LabApi.Features.Extensions;
 using LabApi.Features.Wrappers;
-using MEC;
 using PlayerRoles;
 using PlayerStatsSystem;
+using XpSystem.ApiManager;
 using XpSystem.Extensions;
 using XpSystem.Storage;
 
@@ -19,7 +19,7 @@ namespace XpSystem;
 
 internal class EventHandlers : CustomEventsHandler
 {
-    public static readonly IReadOnlyDictionary<string, string> colorMap = new Dictionary<string, string>
+    private static readonly IReadOnlyDictionary<string, string> ColorMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         { "pink", "#FF96DE" },
         { "red", "#C50000" },
@@ -45,11 +45,16 @@ internal class EventHandlers : CustomEventsHandler
         { "pumpkin", "#EE7600" }
     };
 
-    private static readonly Dictionary<string, Dictionary<string, DateTime>> _lastGrantAt = [];
+    private static readonly Dictionary<string, Dictionary<string, DateTime>> LastGrantAt = [];
+
+    public static string GetHexColor(string badgeColor)
+    {
+        return badgeColor != null && ColorMap.TryGetValue(badgeColor, out string hex) ? hex : "#FFFFFF";
+    }
 
     private static bool TryGrant(Player player, string eventKey)
     {
-        if (player == null || player.DoNotTrack || player.IsDummy)
+        if (!XpManager.CanHaveXp(player))
             return false;
 
         Config config = XpSystemPlugin.Singleton?.Config;
@@ -79,7 +84,7 @@ internal class EventHandlers : CustomEventsHandler
         try
         {
             if (ev.Player != null)
-                DelayedBadgeSetup(ev.Player);
+                BadgeManager.Refresh(ev.Player);
         }
         catch (Exception ex)
         {
@@ -95,8 +100,8 @@ internal class EventHandlers : CustomEventsHandler
         {
             if (ev.Player != null && !string.IsNullOrEmpty(ev.Player.UserId))
             {
-                BadgeManager.RemoveCachedBadge(ev.Player.UserId);
                 ClearPlayerCooldowns(ev.Player.UserId);
+                BadgeManager.Forget(ev.Player);
             }
         }
         catch (Exception ex)
@@ -107,28 +112,12 @@ internal class EventHandlers : CustomEventsHandler
         base.OnPlayerLeft(ev);
     }
 
-    public override void OnPlayerGroupChanged(PlayerGroupChangedEventArgs ev)
-    {
-        try
-        {
-            if (ev.Player == null) return;
-            BadgeManager.CacheOriginalBadge(ev.Player);
-            BadgeManager.UpdatePlayerBadge(ev.Player);
-        }
-        catch (Exception ex)
-        {
-            LogManager.Error($"OnPlayerGroupChanged error: {ex.Message}");
-        }
-
-        base.OnPlayerGroupChanged(ev);
-    }
-
     public override void OnPlayerChangedBadgeVisibility(PlayerChangedBadgeVisibilityEventArgs ev)
     {
         try
         {
-            if (ev.Player == null) return;
-            RefreshBadgeAfterVisibilityChange(ev.Player);
+            if (ev.Player != null)
+                BadgeManager.Refresh(ev.Player);
         }
         catch (Exception ex)
         {
@@ -138,27 +127,14 @@ internal class EventHandlers : CustomEventsHandler
         base.OnPlayerChangedBadgeVisibility(ev);
     }
 
-    public override void OnServerRoundStarted()
-    {
-        try
-        {
-            BadgeManager.UpdateAllBadges();
-        }
-        catch (Exception ex)
-        {
-            LogManager.Error($"OnServerRoundStarted error: {ex.Message}");
-        }
-
-        base.OnServerRoundStarted();
-    }
-
     public override void OnServerWaitingForPlayers()
     {
         try
         {
-            BadgeManager.ClearCache();
             ClearAllCooldowns();
-            BadgeManager.UpdateAllBadges();
+            XpManager.ResetRoundXp();
+            BadgeManager.Clear();
+            VersionManager.CheckForUpdates();
         }
         catch (Exception ex)
         {
@@ -186,7 +162,7 @@ internal class EventHandlers : CustomEventsHandler
             }
 
             Player attacker = ev.Attacker;
-            if (attacker == null || attacker.DoNotTrack || attacker.IsDummy) return;
+            if (!XpManager.CanHaveXp(attacker)) return;
             if (ev.Player != null && ev.Player.IsDummy) return;
             if (ev.Player != null && attacker.UserId == ev.Player.UserId) return;
 
@@ -211,47 +187,22 @@ internal class EventHandlers : CustomEventsHandler
 
     public override void OnScp3114Disguised(Scp3114DisguisedEventArgs ev)
     {
-        try
-        {
-            ReferenceHub ownerHub = ev.Ragdoll.Base.NetworkInfo.OwnerHub;
-            Player disguisedPlayer = ownerHub == null ? null : Player.Get(ownerHub);
-            Player target = disguisedPlayer ?? ev.Player;
-            ev.Player.CustomInfo = GetXpCustomInfo(target) ?? string.Empty;
-        }
-        catch (Exception ex)
-        {
-            LogManager.Error($"OnScp3114Disguised error: {ex.Message}");
-            ev.Player.CustomInfo = string.Empty;
-        }
-
+        BadgeManager.Refresh(ev.Player);
         base.OnScp3114Disguised(ev);
     }
 
     public override void OnScp3114Revealed(Scp3114RevealedEventArgs ev)
     {
-        ev.Player.CustomInfo = "";
+        BadgeManager.Refresh(ev.Player);
         base.OnScp3114Revealed(ev);
     }
 
     public override void OnPlayerChangedRole(PlayerChangedRoleEventArgs ev)
     {
-        if (ev.OldRole == RoleTypeId.Scp3114)
-            ev.Player.CustomInfo = "";
+        if (ev.OldRole == RoleTypeId.Scp3114 || ev.NewRole.RoleTypeId == RoleTypeId.Scp3114)
+            BadgeManager.Refresh(ev.Player);
+
         base.OnPlayerChangedRole(ev);
-    }
-
-    private static string GetXpCustomInfo(Player player)
-    {
-        if (player == null || player.DoNotTrack || player.IsDummy)
-            return null;
-
-        RankConfig rank = XpManager.GetRank(XpManager.GetXp(player));
-        if (rank == null || string.IsNullOrWhiteSpace(rank.BadgeName))
-            return null;
-
-        string hexColor = colorMap.TryGetValue(rank.BadgeColor, out string hex) ? hex : "#FFFFFF";
-
-        return string.IsNullOrWhiteSpace(rank.BadgeColor) ? rank.BadgeName : $"<color={hexColor}>{rank.BadgeName}</color>";
     }
 
     public override void OnPlayerActivatedGenerator(PlayerActivatedGeneratorEventArgs ev)
@@ -358,45 +309,6 @@ internal class EventHandlers : CustomEventsHandler
         base.OnScp049ResurrectedBody(ev);
     }
 
-    private static void DelayedBadgeSetup(Player player)
-    {
-        Timing.CallDelayed(0.1f, () =>
-        {
-            try
-            {
-                if (player?.ReferenceHub == null || !player.IsReady)
-                    return;
-
-                BadgeManager.CacheOriginalBadge(player);
-                BadgeManager.UpdatePlayerBadge(player);
-                BadgeManager.UpdateBadgesForViewer(player);
-            }
-            catch (Exception ex)
-            {
-                LogManager.Error($"DelayedBadgeSetup error: {ex.Message}");
-            }
-        });
-    }
-
-    private static void RefreshBadgeAfterVisibilityChange(Player player)
-    {
-        Timing.CallDelayed(0.1f, () =>
-        {
-            try
-            {
-                if (player?.ReferenceHub == null || !player.IsReady)
-                    return;
-
-                BadgeManager.CacheOriginalBadge(player);
-                BadgeManager.UpdatePlayerBadge(player);
-            }
-            catch (Exception ex)
-            {
-                LogManager.Error($"RefreshBadgeAfterVisibilityChange error: {ex.Message}");
-            }
-        });
-    }
-
     private static bool IsOnCooldown(Player player, string eventKey, float cooldownSeconds)
     {
         if (cooldownSeconds <= 0f)
@@ -405,7 +317,7 @@ internal class EventHandlers : CustomEventsHandler
         if (string.IsNullOrWhiteSpace(player.UserId))
             return false;
 
-        if (!_lastGrantAt.TryGetValue(player.UserId, out Dictionary<string, DateTime> perEvent))
+        if (!LastGrantAt.TryGetValue(player.UserId, out Dictionary<string, DateTime> perEvent))
             return false;
 
         if (!perEvent.TryGetValue(eventKey, out DateTime lastGrant))
@@ -419,10 +331,10 @@ internal class EventHandlers : CustomEventsHandler
         if (string.IsNullOrWhiteSpace(player.UserId))
             return;
 
-        if (!_lastGrantAt.TryGetValue(player.UserId, out Dictionary<string, DateTime> perEvent))
+        if (!LastGrantAt.TryGetValue(player.UserId, out Dictionary<string, DateTime> perEvent))
         {
             perEvent = [];
-            _lastGrantAt[player.UserId] = perEvent;
+            LastGrantAt[player.UserId] = perEvent;
         }
 
         perEvent[eventKey] = DateTime.UtcNow;
@@ -433,11 +345,11 @@ internal class EventHandlers : CustomEventsHandler
         if (string.IsNullOrWhiteSpace(userId))
             return;
 
-        _lastGrantAt.Remove(userId);
+        LastGrantAt.Remove(userId);
     }
 
     private static void ClearAllCooldowns()
     {
-        _lastGrantAt.Clear();
+        LastGrantAt.Clear();
     }
 }

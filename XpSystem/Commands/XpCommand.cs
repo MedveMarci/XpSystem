@@ -4,16 +4,15 @@ using LabApi.Features.Wrappers;
 
 namespace XpSystem.Commands;
 
-[CommandHandler(typeof(ClientCommandHandler))]
 [CommandHandler(typeof(RemoteAdminCommandHandler))]
 public class XpCommand : ParentCommand
 {
     public override string Command => "xp";
 
-    public override string[] Aliases => ["rank", "level"];
-
     public override string Description =>
         "XP system. Subcommands: refresh, leaderboard, toggle, add, remove, get, setmultiplier";
+
+    public override string[] Aliases => [];
 
     public XpCommand()
     {

@@ -1,7 +1,7 @@
 ﻿using System;
 using LabApi.Features.Console;
 
-namespace XpSystem;
+namespace XpSystem.ApiManager;
 
 internal static class LogManager
 {

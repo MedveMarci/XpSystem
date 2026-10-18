@@ -9,7 +9,6 @@ permissions:
 
 env:
   PROJECT: XpSystem
-  DEPENDENCIES: ${{ github.workspace }}/Dependencies
 
 jobs:
   release:
@@ -27,19 +26,14 @@ jobs:
         id: references
         uses: Axwabo/scpsl-references-downloader@v1
 
-      - name: Download LabApiExtensions
-        run: |
-          mkdir -p "$DEPENDENCIES"
-          curl -fsSL -o "$DEPENDENCIES/LabApiExtensions.dll" \
-            https://github.com/KadavasKingdom/LabApiExtensions/releases/latest/download/LabApiExtensions.dll
-
       - name: Build
         env:
           sl_references: ${{ steps.references.outputs.target }}
-          labapi_dependencies: ${{ env.DEPENDENCIES }}
         run: dotnet build ${{ env.PROJECT }}/${{ env.PROJECT }}.csproj -c Release -o Out
 
       - name: Upload assets
         uses: softprops/action-gh-release@v2
         with:
-          files: Out/${{ env.PROJECT }}.dll
+          files: |
+            Out/${{ env.PROJECT }}.dll
+            Out/0Harmony.dll
